@@ -10,8 +10,11 @@
 #define BUFFER_SIZE 1024
 
 void handle_client(int client_socket, rocksdb::DB* db) {
+    bool stop = false;
     char buffer[BUFFER_SIZE] = {0};
-    while (true) {
+    std::string response;
+
+    while (!stop) {
         int valread = read(client_socket, buffer, BUFFER_SIZE);
         if (valread <= 0) break;
 
@@ -23,29 +26,33 @@ void handle_client(int client_socket, rocksdb::DB* db) {
         if (operation == "SET") {
             std::string key, value;
             iss >> key >> value;
-            rocksdb::Status status = db->Put(rocksdb::WriteOptions(), key, value);
-            std::string response = status.ok() ? "OK\n" : "FAIL\n";
-            send(client_socket, response.c_str(), response.size(), 0);
+            rocksdb::Status status = db->Put(rocksdb::WriteOptions(), key, std::move(value));
+            response = status.ok() ? "OK\n" : "FAIL\n";
         } else if (operation == "GET") {
             std::string key, value;
             iss >> key;
             rocksdb::Status status = db->Get(rocksdb::ReadOptions(), key, &value);
-            std::string response = status.ok() ? value + "\n" : "NOT_FOUND\n";
-            send(client_socket, response.c_str(), response.size(), 0);
+            response = status.ok() ? std::move(value) + "\n" : "NOT_FOUND\n";
         } else if (operation == "SCAN") {
             std::string start_key, end_key;
             iss >> start_key >> end_key;
-            std::string response;
+            std::ostringstream oss;
             auto it = db->NewIterator(rocksdb::ReadOptions());
             for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key; it->Next()) {
-                response += it->key().ToString() + " : " + it->value().ToString() + "\n";
+                oss << it->key().ToString() << " : " << it->value().ToString() << "\n";
             }
             delete it;
-            send(client_socket, response.c_str(), response.size(), 0);
+            response = oss.str();
+        } else if (operation == "QUIT") {
+            response = "Server shutting down\n";
+            stop = true;
+        } else {
+            response = "UNKNOWN COMMAND\n";
         }
 
-        //std::cout << "Command received: " << command << std::endl;
+        send(client_socket, response.c_str(), response.size(), 0);
     }
+
     close(client_socket);
 }
 
